@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -8,93 +10,205 @@ using System.Windows.Forms;
 
 internal sealed class SchedulerForm : Form
 {
+    private static readonly Color Accent = Color.FromArgb(0, 95, 184);
+    private static readonly Color SecondaryText = SystemInformation.HighContrast
+        ? SystemColors.WindowText : Color.FromArgb(89, 89, 89);
     private readonly TextBox project = new TextBox();
     private readonly TextBox claude = new TextBox();
     private readonly ComboBox agent = new ComboBox();
-    private readonly DateTimePicker date = new DateTimePicker();
-    private readonly DateTimePicker time = new DateTimePicker();
+    private readonly DailyTimePicker time = new DailyTimePicker();
     private readonly TextBox prompt = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical };
-    private readonly ListView jobs = new ListView { View = View.Details, FullRowSelect = true, MultiSelect = false };
+    private readonly ScheduleList jobs = new ScheduleList();
+    private readonly Label selection = new Label { AutoSize = true };
+    private readonly Label registrationStatus = new Label { AutoSize = true, ForeColor = SecondaryText };
 
     internal SchedulerForm()
     {
-        Text = "Claude Code 에이전트 예약";
-        Font = new Font("맑은 고딕", 10);
+        Text = "AgentFlow";
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        Font = new Font("Segoe UI Variable Text", 10);
+        if (Font.Name != "Segoe UI Variable Text") Font = new Font("Segoe UI", 10);
+        AutoScaleMode = AutoScaleMode.Font;
+        BackColor = SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(243, 243, 243);
+        ForeColor = SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(32, 32, 32);
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(840, 620);
-        MinimumSize = new Size(720, 560);
+        ClientSize = new Size(940, 680);
+        MinimumSize = new Size(800, 670);
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 3 };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(layout);
-        AddRow(layout, "프로젝트", project, Button("폴더 선택", BrowseProject), 36);
-        AddRow(layout, "Claude CLI", claude, Button("파일 선택", BrowseClaude), 36);
-        AddRow(layout, "에이전트", agent, Button("목록 갱신", LoadAgents), 36);
+
+        var registration = new Section(true, 2);
+        registration.Margin = new Padding(0, 0, 0, 12);
+        registration.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        registration.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        layout.Controls.Add(registration, 0, 0);
+        var registrationHeading = Heading("New Schedule", 13);
+        registration.Controls.Add(registrationHeading, 0, 0);
+        registration.SetColumnSpan(registrationHeading, 2);
+        registration.Controls.Add(Field("Project", project, Button("Browse Folder", BrowseProject)), 0, 1);
+        registration.Controls.Add(Field("Claude CLI", claude, Button("Browse File", BrowseClaude)), 0, 2);
+        registration.Controls.Add(Field("Agent", agent, Button("Reload Agents", LoadAgents)), 0, 3);
         agent.DropDownStyle = ComboBoxStyle.DropDown;
         project.Leave += delegate { Safe(LoadAgents); };
         claude.Text = FindClaude();
 
-        date.Format = DateTimePickerFormat.Short;
-        time.Format = DateTimePickerFormat.Custom;
-        time.CustomFormat = "HH:mm";
-        time.ShowUpDown = true;
         DateTime initialTime = DateTime.Now.AddMinutes(5);
-        date.Value = initialTime;
-        time.Value = initialTime;
-        var clock = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        date.Width = 145;
-        time.Width = 85;
-        clock.Controls.Add(date);
-        clock.Controls.Add(time);
-        clock.Controls.Add(new Label { AutoSize = true, Text = "Windows 현지 시간", Margin = new Padding(8, 6, 0, 0) });
-        AddRow(layout, "실행 시각", clock, null, 36);
-        AddRow(layout, "작업 지시", prompt, null, 112);
-        AddRow(layout, "", new Label
-        {
-            Text = "예약 시각에 Windows에 로그인되어 있으면 앱을 닫아도 실행됩니다.",
-            TextAlign = ContentAlignment.MiddleLeft
-        }, Button("1회 예약", Register), 40);
+        time.Time = initialTime.TimeOfDay;
+        var schedule = Field("Daily Run Time", time, showCaption: false);
+        schedule.Controls.Add(new Label { Text = "Every day · Windows local time", AutoSize = true, ForeColor = SecondaryText }, 0, 2);
+        registration.Controls.Add(schedule, 1, 1);
+        prompt.Height = 85;
+        var instruction = Field("Task Instructions", prompt);
+        registration.Controls.Add(instruction, 1, 2);
+        registration.SetRowSpan(instruction, 2);
+        instruction.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        registrationStatus.Text = "Runs when you are signed in to Windows, even if the app is closed.";
+        registrationStatus.AccessibleName = "Scheduling Information";
+        var registrationFooter = Bar(
+            registrationStatus,
+            Button("Schedule", Register, true));
+        registrationFooter.Margin = new Padding(0, 8, 0, 0);
+        registration.Controls.Add(registrationFooter, 0, 4);
+        registration.SetColumnSpan(registrationFooter, 2);
 
+        var history = new Section(false, 1);
+        history.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        history.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        history.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        history.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.Controls.Add(history, 0, 1);
+        history.Controls.Add(Bar(Heading("Scheduled Runs", 13), Button("Refresh", RefreshJobs)), 0, 0);
+
+        jobs.AccessibleName = "Scheduled Runs";
         jobs.Dock = DockStyle.Fill;
-        jobs.Columns.Add("실행 시각", 155);
-        jobs.Columns.Add("에이전트", 150);
-        jobs.Columns.Add("프로젝트", 310);
-        jobs.Columns.Add("상태", 150);
-        jobs.DoubleClick += delegate { Safe(OpenLog); };
-        int listRow = layout.RowCount++;
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.Controls.Add(jobs, 0, listRow);
-        layout.SetColumnSpan(jobs, 3);
+        jobs.Margin = new Padding(0, 6, 0, 6);
+        jobs.SelectionChanged += UpdateSelection;
+        jobs.OpenLogRequested += delegate { Safe(OpenLog); };
+        jobs.ToggleRequested += ToggleSchedule;
+        history.Controls.Add(jobs, 0, 1);
 
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        buttons.Controls.Add(Button("새로고침", RefreshJobs));
-        buttons.Controls.Add(Button("로그 열기", OpenLog));
-        buttons.Controls.Add(Button("예약 취소", Cancel));
-        int buttonRow = layout.RowCount++;
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        layout.Controls.Add(buttons, 0, buttonRow);
-        layout.SetColumnSpan(buttons, 3);
+        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        buttons.Controls.Add(Button("Open Log", OpenLog));
+        buttons.Controls.Add(Button("Cancel Schedule", Cancel));
+        selection.ForeColor = SecondaryText;
+        UpdateSelection();
+        history.Controls.Add(Bar(selection, buttons), 0, 2);
         Shown += delegate { Safe(RefreshJobs); };
     }
 
-    private static void AddRow(TableLayoutPanel layout, string label, Control field, Button button, int height)
+    private Label Heading(string text, float size)
     {
-        int row = layout.RowCount++;
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
-        layout.Controls.Add(new Label { Text = label, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, row);
-        field.Dock = DockStyle.Fill;
-        layout.Controls.Add(field, 1, row);
-        if (button == null) layout.SetColumnSpan(field, 2);
-        else layout.Controls.Add(button, 2, row);
+        var font = new Font(Font.FontFamily, size, FontStyle.Bold);
+        var label = new Label { Text = text, AutoSize = true, Font = font };
+        label.Disposed += delegate { font.Dispose(); };
+        return label;
     }
 
-    private Button Button(string text, Action action)
+    private sealed class Section : TableLayoutPanel
     {
-        var button = new Button { Text = text, AutoSize = true, Height = 29 };
+        internal Section(bool autoSize, int columns)
+        {
+            AutoSize = autoSize;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            Dock = DockStyle.Fill;
+            ColumnCount = columns;
+            Padding = new Padding(16);
+            Margin = Padding.Empty;
+            BackColor = Color.Transparent;
+            SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            base.OnPaintBackground(e);
+            float diameter = 16 * e.Graphics.DpiX / 96;
+            float right = ClientSize.Width - 1;
+            float bottom = ClientSize.Height - 1;
+            if (right <= diameter || bottom <= diameter) return;
+
+            using (var shape = new GraphicsPath())
+            using (var fill = new SolidBrush(SystemInformation.HighContrast ? SystemColors.Window : Color.White))
+            using (var border = new Pen(SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(224, 224, 224)))
+            {
+                shape.AddArc(0, 0, diameter, diameter, 180, 90);
+                shape.AddArc(right - diameter, 0, diameter, diameter, 270, 90);
+                shape.AddArc(right - diameter, bottom - diameter, diameter, diameter, 0, 90);
+                shape.AddArc(0, bottom - diameter, diameter, diameter, 90, 90);
+                shape.CloseFigure();
+                var state = e.Graphics.Save();
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.FillPath(fill, shape);
+                e.Graphics.DrawPath(border, shape);
+                e.Graphics.Restore(state);
+            }
+        }
+    }
+
+    private static TableLayoutPanel Bar(Control left, Control right)
+    {
+        var bar = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        left.Anchor = AnchorStyles.Left;
+        right.Anchor = AnchorStyles.Right;
+        bar.Controls.Add(left, 0, 0);
+        bar.Controls.Add(right, 1, 0);
+        return bar;
+    }
+
+    private static TableLayoutPanel Field(string label, Control field, Button button = null, bool showCaption = true)
+    {
+        var group = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 2, Margin = new Padding(0, 3, 8, 3) };
+        group.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        group.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        if (showCaption)
+        {
+            var caption = new Label { Text = label, AutoSize = true };
+            group.Controls.Add(caption, 0, 0);
+            group.SetColumnSpan(caption, 2);
+        }
+        field.AccessibleName = label;
+        field.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        group.Controls.Add(field, 0, 1);
+        if (button == null) group.SetColumnSpan(field, 2);
+        else group.Controls.Add(button, 1, 1);
+        return group;
+    }
+
+    private Button Button(string text, Action action, bool primary = false)
+    {
+        var button = new Button { Text = text, AutoSize = true, MinimumSize = new Size(0, 32) };
+        if (primary && !SystemInformation.HighContrast)
+        {
+            button.FlatStyle = FlatStyle.Flat;
+            button.BackColor = Accent;
+            button.ForeColor = Color.White;
+            button.FlatAppearance.BorderColor = Accent;
+        }
         button.Click += delegate { Safe(action); };
         return button;
+    }
+
+    private void UpdateSelection()
+    {
+        var row = jobs.Selected;
+        selection.Text = row == null ? "No schedule selected" : row.Job.Agent + " · " + row.Status;
+    }
+
+    private void ToggleSchedule(ScheduleList.Row row, bool enabled)
+    {
+        Safe(delegate
+        {
+            var scheduler = new WindowsScheduler();
+            scheduler.SetEnabled(row.Job, enabled);
+            row.Enabled = enabled;
+            row.Status = scheduler.Status(row.Job, out row.Enabled);
+        });
+        UpdateSelection();
     }
 
     private void Safe(Action action)
@@ -156,15 +270,12 @@ internal sealed class SchedulerForm : Form
 
     private void Register()
     {
-        if (!Directory.Exists(project.Text)) throw new ArgumentException("프로젝트 폴더를 선택하세요.");
+        if (!Directory.Exists(project.Text)) throw new ArgumentException("Select a project folder.");
         if (!File.Exists(claude.Text) || !String.Equals(Path.GetFileName(claude.Text), "claude.exe", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Claude Code의 claude.exe 파일을 선택하세요.");
-        if (!Job.ValidAgent(agent.Text.Trim())) throw new ArgumentException("올바른 에이전트 이름을 입력하세요.");
-        if (String.IsNullOrWhiteSpace(prompt.Text)) throw new ArgumentException("작업 지시를 입력하세요.");
-        DateTime local = date.Value.Date.AddHours(time.Value.Hour).AddMinutes(time.Value.Minute);
-        if (local <= DateTime.Now) throw new ArgumentException("미래의 실행 시각을 선택하세요.");
-        if (TimeZoneInfo.Local.IsInvalidTime(local) || TimeZoneInfo.Local.IsAmbiguousTime(local))
-            throw new ArgumentException("일광 절약 시간 전환 구간 밖의 시각을 선택하세요.");
+            throw new ArgumentException("Select the Claude Code claude.exe file.");
+        if (!Job.ValidAgent(agent.Text.Trim())) throw new ArgumentException("Enter a valid agent name.");
+        if (String.IsNullOrWhiteSpace(prompt.Text)) throw new ArgumentException("Enter task instructions.");
+        TimeSpan runTime = time.Time;
         var job = new Job
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -172,7 +283,10 @@ internal sealed class SchedulerForm : Form
             Claude = Path.GetFullPath(claude.Text),
             Agent = agent.Text.Trim(),
             Prompt = prompt.Text,
-            ScheduledUtc = local.ToUniversalTime()
+            ScheduledUtc = DateTime.UtcNow,
+            Daily = true,
+            DailyHour = runTime.Hours,
+            DailyMinute = runTime.Minutes
         };
         var scheduler = new WindowsScheduler();
         job.Save();
@@ -182,51 +296,63 @@ internal sealed class SchedulerForm : Form
             File.Delete(Path.Combine(job.Folder, "job.xml"));
             throw;
         }
-        RefreshJobs();
+        RefreshJobs(job.Id);
+        registrationStatus.Text = "Scheduled. Check the status in the list below.";
     }
 
     private void RefreshJobs()
     {
+        RefreshJobs(jobs.Selected?.Job.Id);
+    }
+
+    private void RefreshJobs(string selected)
+    {
         if (!Directory.Exists(Job.Root)) return;
         var scheduler = new WindowsScheduler();
-        string selected = jobs.SelectedItems.Count == 0 ? null : ((Job)jobs.SelectedItems[0].Tag).Id;
-        jobs.BeginUpdate();
-        try
-        {
-            jobs.Items.Clear();
-            foreach (var job in Directory.EnumerateDirectories(Job.Root)
+        var rows = Directory.EnumerateDirectories(Job.Root)
                 .Where(folder => File.Exists(Path.Combine(folder, "job.xml")))
-                .Select(folder => Job.Load(Path.GetFileName(folder))).OrderByDescending(job => job.ScheduledUtc))
+                .Select(folder => Job.Load(Path.GetFileName(folder))).OrderByDescending(job => job.ScheduledUtc)
+                .Select(job =>
             {
-                string status = File.Exists(job.ResultPath) ? File.ReadAllText(job.ResultPath) : scheduler.Status(job);
-                var item = new ListViewItem(new[]
-                {
-                    job.ScheduledUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm"), job.Agent, job.Project, status
-                }) { Tag = job };
-                jobs.Items.Add(item);
-                item.Selected = job.Id == selected;
-            }
-        }
-        finally { jobs.EndUpdate(); }
+                bool? enabled = null;
+                string status = !job.Daily && File.Exists(job.ResultPath)
+                    ? DisplayResult(File.ReadAllText(job.ResultPath)) : scheduler.Status(job, out enabled);
+                string schedule = job.Daily ? "Daily at " + DateTime.Today.AddHours(job.DailyHour)
+                    .AddMinutes(job.DailyMinute).ToString("h:mm tt", CultureInfo.InvariantCulture)
+                    : job.ScheduledUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                return new ScheduleList.Row(job, schedule, status, enabled);
+            }).ToArray();
+        jobs.ShowRows(rows, selected);
+        UpdateSelection();
+    }
+
+    private static string DisplayResult(string result)
+    {
+        // Result files written by earlier versions may contain Korean text.
+        if (result == "완료") return "Completed";
+        if (result == "취소됨") return "Canceled";
+        const string legacyFailure = "실패 (";
+        return result.StartsWith(legacyFailure, StringComparison.Ordinal)
+            ? "Failed (" + result.Substring(legacyFailure.Length) : result;
     }
 
     private Job Selected()
     {
-        if (jobs.SelectedItems.Count == 0) throw new InvalidOperationException("목록에서 예약을 선택하세요.");
-        return (Job)jobs.SelectedItems[0].Tag;
+        if (jobs.Selected == null) throw new InvalidOperationException("Select a schedule from the list.");
+        return jobs.Selected.Job;
     }
 
     private void OpenLog()
     {
         string path = Selected().LogPath;
-        if (!File.Exists(path)) throw new InvalidOperationException("아직 실행 로그가 없습니다.");
+        if (!File.Exists(path)) throw new InvalidOperationException("The run log is not available yet.");
         Process.Start(path);
     }
 
     private void Cancel()
     {
         Job job = Selected();
-        if (File.Exists(job.ResultPath)) throw new InvalidOperationException("이미 종료된 예약입니다.");
+        if (!job.Daily && File.Exists(job.ResultPath)) throw new InvalidOperationException("This schedule has already ended.");
         new WindowsScheduler().Cancel(job);
         RefreshJobs();
     }

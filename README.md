@@ -1,19 +1,19 @@
 # Claude Code 에이전트 예약
 
-Windows x64에서 지정한 프로젝트의 Claude Code 에이전트를 한 번 실행하도록 예약합니다.
+Windows x64에서 지정한 프로젝트의 Claude Code 에이전트가 매일 같은 현지 시각에 실행되도록 예약합니다.
 
 ## 사용 방법
 
 1. 사용할 Windows 계정으로 Claude Code CLI에 로그인합니다. 대상 프로젝트에서 Claude Code를 한 번 열어 폴더 신뢰 설정과 작업에 필요한 도구 권한을 확인합니다.
-2. `dist\AgentFlow.exe`를 실행합니다. 예약을 등록하기 전에 실행 파일을 계속 사용할 위치에 둡니다.
+2. `dist\daily-row-toggle\AgentFlow.exe`를 실행합니다. 예약을 등록하기 전에 배포 폴더 전체를 계속 사용할 위치에 둡니다.
 3. 프로젝트 폴더를 선택합니다. CLI가 자동으로 검색되지 않으면 설치된 `claude.exe`를 선택합니다.
-4. `.claude\agents`에서 찾은 에이전트를 선택하거나 이름을 직접 입력합니다. 실행 시각과 작업 지시를 입력하고 **1회 예약**을 누릅니다.
-5. **새로고침**으로 상태를 확인하고 **로그 열기**로 결과를 봅니다. 실행 전에는 **예약 취소**를 사용할 수 있습니다.
+4. `.claude\agents`에서 찾은 에이전트를 선택하거나 이름을 직접 입력합니다. **Daily Run Time**과 작업 지시를 입력하고 **Schedule**을 누릅니다.
+5. **Refresh**로 상태를 확인하고 **Open Log**로 가장 최근 실행 로그를 봅니다. **Cancel Schedule**로 이후 반복 실행을 취소할 수 있습니다.
 
-예약 시각은 Windows 현지 시간입니다. 실행 시에는 예약을 등록한 Windows 계정이 로그인되어 있어야 합니다. 예약을 놓치면 작업 스케줄러가 예약 시각으로부터 최대 24시간 이내에 다시 시작할 수 있습니다. 작업이 끝날 때까지 앱 실행 파일과 프로젝트 폴더를 같은 위치에 유지하세요.
+예약 시각은 Windows 현지 시간입니다. 실행 시에는 예약을 등록한 Windows 계정이 로그인되어 있어야 합니다. 예약을 놓치면 Windows 작업 스케줄러에서 실행 가능한 시점에 시작할 수 있습니다. 이전 실행이 진행 중이면 새 실행과 겹치지 않습니다. 예약을 취소할 때까지 배포 폴더와 프로젝트 폴더의 위치를 유지하세요.
 
 Claude Code는 프로젝트 폴더를 작업 디렉터리로 사용하고 기본 권한 모드에서 비대화형으로 실행됩니다. 대화형 승인이 필요한 도구는 예약 실행에서 사용이 거부될 수 있습니다. 작업 지시와 실행 로그는 `%LOCALAPPDATA%\ClaudeAgentScheduler`에 저장됩니다.
 
 ## 빌드
 
-Windows x64에서 PowerShell로 `.\build.ps1`을 실행합니다. Windows의 .NET Framework C# 컴파일러를 사용하며, 결과는 `dist\AgentFlow.exe`입니다.
+Windows x64에서 .NET 8 SDK를 사용해 PowerShell로 `.\build.ps1`을 실행합니다. WinUI를 포함한 배포 결과는 `dist\daily-row-toggle`에 생성됩니다.
