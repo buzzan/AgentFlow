@@ -189,6 +189,7 @@ internal static class Program
             try { return Run(Job.Load(args[1])); }
             catch { return 1; }
         }
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         WinUIHost.RunApplication();

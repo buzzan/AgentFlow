@@ -29,6 +29,7 @@ internal sealed class SchedulerForm : Form
         Font = new Font("Segoe UI Variable Text", 10);
         if (Font.Name != "Segoe UI Variable Text") Font = new Font("Segoe UI", 10);
         AutoScaleMode = AutoScaleMode.Font;
+        SetStyle(ControlStyles.ResizeRedraw, true);
         BackColor = SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(243, 243, 243);
         ForeColor = SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(32, 32, 32);
         StartPosition = FormStartPosition.CenterScreen;
@@ -49,9 +50,13 @@ internal sealed class SchedulerForm : Form
         var registrationHeading = Heading("New Schedule", 13);
         registration.Controls.Add(registrationHeading, 0, 0);
         registration.SetColumnSpan(registrationHeading, 2);
-        registration.Controls.Add(Field("Project", project, Button("Browse Folder", BrowseProject)), 0, 1);
+        var browseProject = Button("Browse Folder", BrowseProject);
+        browseProject.Anchor = AnchorStyles.Left;
+        registration.Controls.Add(Field("Project", project, browseProject), 0, 1);
         registration.Controls.Add(Field("Claude CLI", claude, Button("Browse File", BrowseClaude)), 0, 2);
-        registration.Controls.Add(Field("Agent", agent, Button("Reload Agents", LoadAgents)), 0, 3);
+        var reloadAgents = Button("Reload Agents", LoadAgents);
+        reloadAgents.Anchor = AnchorStyles.Left;
+        registration.Controls.Add(Field("Agent", agent, reloadAgents), 0, 3);
         agent.DropDownStyle = ComboBoxStyle.DropDown;
         project.Leave += delegate { Safe(LoadAgents); };
         claude.Text = FindClaude();
@@ -98,6 +103,19 @@ internal sealed class SchedulerForm : Form
         UpdateSelection();
         history.Controls.Add(Bar(selection, buttons), 0, 2);
         Shown += delegate { Safe(RefreshJobs); };
+    }
+
+    protected override void OnResize(EventArgs args)
+    {
+        base.OnResize(args);
+        if (IsHandleCreated && WindowState != FormWindowState.Minimized)
+            Invalidate(true);
+    }
+
+    protected override void OnResizeEnd(EventArgs args)
+    {
+        base.OnResizeEnd(args);
+        Invalidate(true);
     }
 
     private Label Heading(string text, float size)

@@ -201,7 +201,17 @@ internal abstract class WinUIHost : Control
         base.OnHandleCreated(args);
         island = new DesktopWindowXamlSource();
         island.Initialize(Win32Interop.GetWindowIdFromWindow(Handle));
-        island.Content = CreateContent();
+        // An opaque surface prevents the island from retaining pixels from
+        // WinForms controls that move out of its bounds during a resize.
+        var background = SystemInformation.HighContrast ? System.Drawing.SystemColors.Window : System.Drawing.Color.White;
+        var surface = new XamlControls.Grid
+        {
+            RequestedTheme = Xaml.ElementTheme.Light,
+            Background = new Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(
+                background.A, background.R, background.G, background.B))
+        };
+        surface.Children.Add(CreateContent());
+        island.Content = surface;
         island.TakeFocusRequested += delegate(DesktopWindowXamlSource sender, DesktopWindowXamlSourceTakeFocusRequestedEventArgs request)
         {
             var form = FindForm();
@@ -227,8 +237,14 @@ internal abstract class WinUIHost : Control
 
     private void ResizeIsland()
     {
-        if (island != null && ClientSize.Width > 0 && ClientSize.Height > 0)
-            island.SiteBridge.MoveAndResize(new RectInt32(0, 0, ClientSize.Width, ClientSize.Height));
+        var size = ClientSize;
+        if (island == null || size.Width <= 0 || size.Height <= 0) return;
+        island.SiteBridge.MoveAndResize(new RectInt32(0, 0, size.Width, size.Height));
+        if (island.Content is Xaml.FrameworkElement content)
+        {
+            content.InvalidateMeasure();
+            content.InvalidateArrange();
+        }
     }
 
     protected override void OnHandleDestroyed(EventArgs args)
