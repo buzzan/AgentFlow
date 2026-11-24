@@ -45,7 +45,7 @@ dotnet build .\AgentFlow.csproj -c Release
 .\tests\run.ps1
 ```
 
-- 빌드 후 `dist\daily-row-toggle\AgentFlow.exe`를 실행해 실제로 AgentFlow 창이 열리고 응답하는지 확인한다. UI 테스트를 시작하기 전에 해당 창을 닫는다.
+- 빌드 후 `dist\AgentFlow.exe`를 실행해 실제로 AgentFlow 창이 열리고 응답하는지 확인한다. UI 테스트를 시작하기 전에 해당 창을 닫는다.
 - 예약 등록·실행만 확인하려면 `-Suite Integration`, 화면 흐름만 확인하려면 `-Suite UI`를 사용한다. 테스트는 가짜 Claude CLI를 사용한다.
 - 결과는 `work\test-results\<실행 ID>\test-results.json`에서 확인한다. 화면 변경 시 캡처가 있으면 오류 안내, 최소 창 크기의 레이아웃, 주요 버튼 표시를 검토한다. 실행하지 못한 항목과 실패 원인은 검증 결과에 남긴다.
 

@@ -459,7 +459,10 @@ internal sealed class ScheduleCenter : Window
     private Button Command(string id, string name, Symbol? icon, Func<Task> execute, bool primary = false)
     {
         var button = new Button { Content = name, VerticalAlignment = VerticalAlignment.Bottom };
-        if (icon.HasValue) button.Content = Actions(new SymbolIcon(icon.Value) { Width = 16 }, Text(name));
+        if (icon.HasValue)
+        {
+            button.Content = Actions(new SymbolIcon(icon.Value) { VerticalAlignment = VerticalAlignment.Center }, Text(name));
+        }
         AutomationProperties.SetName(button, name);
         AutomationProperties.SetAutomationId(button, id);
         if (primary) button.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
