@@ -11,13 +11,17 @@ function Find-TestJob {
         $jobFile = Join-Path $folder.FullName 'job.xml'
         if (Test-Path -LiteralPath $jobFile) {
             try { $job = ([xml](Get-Content -LiteralPath $jobFile -Raw)).Job } catch { continue }
-            if ($job.Project -eq $project.FullName -and $job.Claude -eq $Fixture -and $job.Id -eq $folder.Name) { return $folder }
+            if ($job.Project -eq $project.FullName -and $job.Claude -eq $Fixture -and $job.Id -eq $folder.Name) { $folder }
         }
     }
 }
 
-$process = Start-Process -FilePath $Executable -PassThru
+$process = $null
+$damagedJob = $null
 try {
+    $damagedJob = New-Item -ItemType Directory -Path (Join-Path $jobRoot ([guid]::NewGuid().ToString('N'))) -Force
+    Set-Content -LiteralPath (Join-Path $damagedJob.FullName 'job.xml') -Value '<Job>'
+    $process = Start-Process -FilePath $Executable -PassThru
     $watch = [Diagnostics.Stopwatch]::StartNew()
     do {
         Start-Sleep -Milliseconds 100
@@ -39,6 +43,27 @@ try {
 
     function Invoke-Button([string]$Name) {
         (Find-Button $Name).GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+        if (-not $process.WaitForInputIdle(5000)) { throw "UI did not finish processing '$Name'." }
+    }
+
+    function Wait-ForState([string]$Description, [scriptblock]$Condition) {
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            if (& $Condition) { return }
+            Start-Sleep -Milliseconds 100
+        } while ($timer.Elapsed.TotalSeconds -lt 10)
+        throw "Timed out waiting for $Description."
+    }
+
+    function Test-SelectionActions([bool]$Enabled) {
+        ((Find-Button 'Open Log').Current.IsEnabled -eq $Enabled) -and
+            ((Find-Button 'Cancel Schedule').Current.IsEnabled -eq $Enabled)
+    }
+
+    function Find-NamedControl([string]$Name) {
+        $condition = New-Object Windows.Automation.PropertyCondition `
+            ([Windows.Automation.AutomationElement]::NameProperty, $Name)
+        $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
     }
 
     function Set-Field([string]$Name, [string]$Value) {
@@ -61,6 +86,9 @@ try {
         if ((Find-Button $name).Current.IsEnabled) { throw "Expected disabled button before selection: $name" }
     }
     Invoke-Button 'Refresh'
+    Invoke-Button 'Reload Agents'
+    Wait-ForState 'disabled selection actions after Refresh and Reload Agents' { Test-SelectionActions $false }
+    Write-Output 'PASS UI without selection: Refresh then Reload Agents'
     Set-Field 'Project' $project.FullName
     Set-Field 'Claude CLI' $Fixture
     Invoke-Button 'Reload Agents'
@@ -74,6 +102,32 @@ try {
     } until (($jobFolder -and (Find-Button 'Cancel Schedule').Current.IsEnabled) -or $watch.Elapsed.TotalSeconds -ge 10)
     if (-not $jobFolder -or -not (Find-Button 'Cancel Schedule').Current.IsEnabled) { throw 'UI did not register and select the schedule.' }
     if (-not $process.WaitForInputIdle(5000)) { throw 'UI did not finish updating after registration.' }
+    Invoke-Button 'Refresh'
+    Invoke-Button 'Reload Agents'
+    Wait-ForState 'selected schedule after Refresh and Reload Agents' { Test-SelectionActions $true }
+    Write-Output 'PASS UI with selection: Schedule, Refresh, then Reload Agents'
+
+    $taskName = "ClaudeAgentScheduler-$($jobFolder.Name)"
+    $toggleCondition = New-Object Windows.Automation.PropertyCondition `
+        ([Windows.Automation.AutomationElement]::ClassNameProperty, 'ToggleSwitch')
+    $projectCell = Find-NamedControl $project.FullName
+    if (-not $projectCell) { throw 'Test project was not found in the schedule list.' }
+    $walker = [Windows.Automation.TreeWalker]::RawViewWalker
+    $row = $walker.GetParent($projectCell)
+    while ($row -and $row.Current.ControlType -ne [Windows.Automation.ControlType]::ListItem) {
+        $row = $walker.GetParent($row)
+    }
+    if (-not $row) { throw 'Schedule row for the test project was not found.' }
+    $toggle = $row.FindFirst([Windows.Automation.TreeScope]::Descendants, $toggleCondition)
+    if (-not $toggle) { throw 'Schedule toggle for the test project was not found.' }
+    $toggle.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-ForState 'task disabled' { (Get-ScheduledTask -TaskName $taskName -TaskPath '\').State -eq 'Disabled' }
+    Invoke-Button 'Refresh'
+    Wait-ForState 'disabled task remains selected and displays Off' {
+        (Test-SelectionActions $true) -and (Find-NamedControl ('fixture-agent {0} Off' -f [char]183))
+    }
+    Write-Output 'PASS UI with disabled task: toggle Off then Refresh'
+
     Invoke-Button 'Cancel Schedule'
     $watch.Restart()
     $canceled = Join-Path $jobFolder.FullName 'canceled'
@@ -93,17 +147,44 @@ try {
     if ($window.FindFirst([Windows.Automation.TreeScope]::Descendants, $rowName)) {
         throw 'Canceled schedule still appears in the list.'
     }
-    Write-Output 'PASS UI startup, Refresh, registration, selection and removal after cancellation'
+    Invoke-Button 'Refresh'
+    Wait-ForState 'canceled row absent after Refresh' { (Test-SelectionActions $false) -and !(Find-NamedControl $project.FullName) }
+    Write-Output 'PASS UI cancellation: Cancel disabled task, then Refresh'
+
+    Invoke-Button 'Schedule'
+    Wait-ForState 'new schedule registered after cancellation' { @(Find-TestJob).Count -eq 2 -and (Test-SelectionActions $true) }
+    $newJob = Find-TestJob | Where-Object Name -ne $jobFolder.Name | Select-Object -First 1
+    $worker = Start-Process -FilePath $Executable -ArgumentList '--run', $newJob.Name -PassThru
+    try {
+        if (!$worker.WaitForExit(10000)) { $worker.Kill(); $worker.WaitForExit(); throw 'Fixture run timed out.' }
+        if ($worker.ExitCode -ne 0) { throw "Fixture returned exit code $($worker.ExitCode)." }
+    }
+    finally { $worker.Dispose() }
+    Invoke-Button 'Refresh'
+    Wait-ForState 'last run result displayed for the new selection' {
+        (Test-SelectionActions $true) -and (Find-NamedControl ('fixture-agent {0} Last run: Completed' -f [char]183))
+    }
+    Invoke-Button 'Cancel Schedule'
+    Wait-ForState 'completed schedule canceled with log preserved' {
+        (Test-SelectionActions $false) -and (Test-Path -LiteralPath (Join-Path $newJob.FullName 'canceled')) -and
+            @(Get-ChildItem -LiteralPath $newJob.FullName -Filter 'run-*.log' -File).Count -gt 0
+    }
+    Write-Output 'PASS UI rescheduling: Schedule again, run fixture, Refresh, then Cancel'
 }
 finally {
-    $process.Refresh()
-    if (-not $process.HasExited) {
-        [void]$process.CloseMainWindow()
-        if (-not $process.WaitForExit(5000)) { $process.Kill(); $process.WaitForExit() }
+    if ($process) {
+        $process.Refresh()
+        if (-not $process.HasExited) {
+            [void]$process.CloseMainWindow()
+            if (-not $process.WaitForExit(5000)) { $process.Kill(); $process.WaitForExit() }
+        }
+        $process.Dispose()
     }
-    $process.Dispose()
-    $jobFolder = Find-TestJob
-    if ($jobFolder -and $jobFolder.Name -match '^[a-f0-9]{32}$') {
+    if ($damagedJob) {
+        [IO.File]::Delete((Join-Path $damagedJob.FullName 'job.xml'))
+        [IO.Directory]::Delete($damagedJob.FullName)
+    }
+    foreach ($jobFolder in (Find-TestJob | Where-Object Name -Match '^[a-f0-9]{32}$')) {
         $task = Get-ScheduledTask -TaskPath '\' -TaskName "ClaudeAgentScheduler-$($jobFolder.Name)" -ErrorAction SilentlyContinue
         if ($task) { $task | Unregister-ScheduledTask -Confirm:$false }
         [IO.Directory]::Delete($jobFolder.FullName, $true)

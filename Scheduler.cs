@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -28,16 +29,48 @@ public sealed class Job
 
     internal string TaskName { get { return "ClaudeAgentScheduler-" + Id; } }
     internal string Folder { get { return Path.Combine(Root, Id); } }
-    internal string LogPath { get { return Path.Combine(Folder, "run.log"); } }
+    internal string LogPath
+    {
+        get
+        {
+            if (Daily)
+            {
+                string latest = Directory.EnumerateFiles(Folder, "run-*.log")
+                    .OrderByDescending(path => path, StringComparer.Ordinal).FirstOrDefault();
+                if (latest != null) return latest;
+            }
+            return Path.Combine(Folder, "run.log");
+        }
+    }
+
+    internal string NewLogPath()
+    {
+        return Daily
+            ? Path.Combine(Folder, "run-" + DateTime.UtcNow.Ticks.ToString("D19", CultureInfo.InvariantCulture) + ".log")
+            : LogPath;
+    }
+
+    internal void RemovePreviousLogs(string current)
+    {
+        foreach (string path in Directory.EnumerateFiles(Folder, "run-*.log").Append(Path.Combine(Folder, "run.log")))
+        {
+            if (path == current) continue;
+            try { File.Delete(path); }
+            catch (IOException) { } // A viewer may still have the previous log open.
+            catch (UnauthorizedAccessException) { }
+        }
+    }
     internal string ResultPath { get { return Path.Combine(Folder, "result.txt"); } }
     internal string CanceledPath { get { return Path.Combine(Folder, "canceled"); } }
     internal DateTime DeadlineUtc { get { return ScheduledUtc.AddDays(1); } }
 
+    // 단발 예약의 실행 또는 취소 권한을 선점한다. 이미 선점된 예약은 파일 생성에 실패한다.
     internal void Claim()
     {
         using (File.Open(Path.Combine(Folder, "claimed"), FileMode.CreateNew)) { }
     }
 
+    // 결과를 임시 파일에 먼저 기록하고, 반복 예약이면 이전 결과를 교체한다.
     internal void SetResult(string result)
     {
         string temporary = ResultPath + ".tmp";
@@ -46,6 +79,7 @@ public sealed class Job
         else File.Move(temporary, ResultPath);
     }
 
+    // 예약 정보를 XML로 직렬화한 뒤 완성된 파일을 job.xml로 옮긴다.
     internal void Save()
     {
         Directory.CreateDirectory(Folder);
@@ -54,6 +88,7 @@ public sealed class Job
         File.Move(Path.Combine(Folder, "job.tmp"), Path.Combine(Folder, "job.xml"));
     }
 
+    // 예약 ID의 형식을 확인하고 저장된 XML을 읽어 내부 ID와 대조한다.
     internal static Job Load(string id)
     {
         Guid parsed;
@@ -67,6 +102,7 @@ public sealed class Job
         }
     }
 
+    // CLI에 전달할 에이전트 이름이 허용된 문자로 구성됐는지 검사한다.
     internal static bool ValidAgent(string name)
     {
         return Regex.IsMatch(name ?? "", @"\A[a-zA-Z0-9][a-zA-Z0-9:_-]*\z");
@@ -75,9 +111,11 @@ public sealed class Job
 
 internal sealed class WindowsScheduler
 {
+    private const int TaskNotFound = unchecked((int)0x80070002);
     private readonly dynamic service;
     private readonly dynamic folder;
 
+    // Windows 작업 스케줄러 서비스에 연결하고 루트 작업 폴더를 연다.
     internal WindowsScheduler()
     {
         service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", true));
@@ -85,6 +123,7 @@ internal sealed class WindowsScheduler
         folder = service.GetFolder("\\");
     }
 
+    // 로그인한 사용자 계정에 단발 또는 일일 트리거를 등록하고 AgentFlow의 --run 명령을 연결한다.
     internal void Register(Job job, string executablePath = null)
     {
         const int timeTrigger = 1;
@@ -124,12 +163,15 @@ internal sealed class WindowsScheduler
         folder.RegisterTaskDefinition(job.TaskName, task, createOnly, user, null, interactiveToken, null);
     }
 
+    // 등록된 작업을 삭제하지 않고 활성화 또는 비활성화한다.
     internal void SetEnabled(Job job, bool enabled)
     {
         dynamic task = folder.GetTask(job.TaskName);
         task.Enabled = enabled;
     }
 
+    // 작업 스케줄러의 상태와 저장된 실행 결과를 조합해 화면에 표시할 상태를 반환한다.
+    // 활성화 상태를 조회할 수 없는 경우 enabled는 null이다.
     internal string Status(Job job, out bool? enabled)
     {
         enabled = null;
@@ -146,8 +188,18 @@ internal sealed class WindowsScheduler
             int result = task.LastTaskResult;
             if (job.Daily)
             {
-                if (File.Exists(job.ResultPath)) return "Last run: " + File.ReadAllText(job.ResultPath);
-                if (result == 0x41303 || result == 0) return "Scheduled";
+                bool failed = result != 0x41303 && result != 0;
+                if (File.Exists(job.ResultPath))
+                {
+                    // LastRunTime is the scheduled attempt's start time in local time.
+                    if (!failed || ((DateTime)task.LastRunTime).ToUniversalTime() <= File.GetLastWriteTimeUtc(job.ResultPath))
+                    {
+                        using var stream = File.Open(job.ResultPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+                        using var reader = new StreamReader(stream);
+                        return "Last run: " + reader.ReadToEnd();
+                    }
+                }
+                if (!failed) return "Scheduled";
                 return String.Format("Run error (0x{0:X8})", result);
             }
             if (result != 0x41303 && result != 0 && !File.Exists(job.ResultPath))
@@ -155,20 +207,21 @@ internal sealed class WindowsScheduler
             if (DateTime.UtcNow >= job.DeadlineUtc) return "Expired";
             return DateTime.UtcNow < job.ScheduledUtc ? "Scheduled" : "Waiting to start";
         }
-        catch (COMException error)
+        catch (Exception error) when (IsMissingTask(error))
         {
-            if (error.ErrorCode != unchecked((int)0x80070002)) throw;
             return !job.Daily && DateTime.UtcNow >= job.DeadlineUtc ? "Expired" : "Scheduled task not found";
         }
     }
 
+    // Windows 작업을 삭제하고 취소를 기록한다. 단발 예약은 실행 전에 선점할 수 있을 때만 취소한다.
     internal void Cancel(Job job)
     {
         if (job.Daily)
         {
-            if (File.Exists(job.CanceledPath)) throw new InvalidOperationException("This schedule was already canceled.");
-            folder.DeleteTask(job.TaskName, 0);
-            using (File.Create(job.CanceledPath)) { }
+            if (File.Exists(job.CanceledPath)) return;
+            try { folder.DeleteTask(job.TaskName, 0); }
+            catch (Exception error) when (IsMissingTask(error)) { }
+            using (File.Open(job.CanceledPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)) { }
             return;
         }
         dynamic task = folder.GetTask(job.TaskName);
@@ -177,11 +230,17 @@ internal sealed class WindowsScheduler
         job.SetResult("Canceled");
         folder.DeleteTask(job.TaskName, 0);
     }
+
+    private static bool IsMissingTask(Exception error)
+    {
+        return error is (COMException or FileNotFoundException) && error.HResult == TaskNotFound;
+    }
 }
 
 internal static class Program
 {
     [STAThread]
+    // --run 요청은 지정된 예약을 실행하고, 일반 시작은 UI를 연다.
     private static int Main(string[] args)
     {
         if (args.Length == 2 && args[0] == "--run")
@@ -204,6 +263,7 @@ internal static class Program
         return 0;
     }
 
+    // 단발 예약은 한 번만 선점하고, 일일 예약은 잠금 파일로 동시 실행을 막고 취소 여부를 확인한다.
     private static int Run(Job job)
     {
         if (!job.Daily)
@@ -218,10 +278,13 @@ internal static class Program
         }
     }
 
+    // 프로젝트 폴더에서 Claude CLI를 시작하고 작업 지시를 표준 입력으로 전달한다.
+    // 표준 출력과 오류, 종료 코드를 이번 실행의 로그에 기록하고 실행 결과를 별도로 저장한다.
     private static int Execute(Job job)
     {
         var utf8 = new UTF8Encoding(false);
-        using (var file = new FileStream(job.LogPath, job.Daily ? FileMode.Create : FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+        string logPath = job.NewLogPath();
+        using (var file = new FileStream(logPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
         using (var log = new StreamWriter(file, utf8) { AutoFlush = true })
         {
             int exitCode = 1;
@@ -264,10 +327,12 @@ internal static class Program
             catch (Exception error) { log.WriteLine(error); }
             log.WriteLine("[{0:O}] exit code {1}", DateTimeOffset.Now, exitCode);
             job.SetResult(exitCode == 0 ? "Completed" : "Failed (" + exitCode + ")");
+            if (job.Daily) job.RemovePreviousLogs(logPath);
             return exitCode;
         }
     }
 
+    // 출력 스트림을 줄 단위로 읽고, 두 스트림이 같은 로그에 쓸 때 한 줄씩 기록되도록 동기화한다.
     private static async Task Pump(StreamReader reader, TextWriter log, string prefix)
     {
         string line;

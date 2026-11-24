@@ -74,6 +74,9 @@ internal sealed class SchedulerForm : Form
         registration.Controls.Add(schedule, 1, 1);
         prompt.Height = 85;
         var instruction = Field("Task Instructions", prompt);
+        var instructionMargin = instruction.Margin;
+        instructionMargin.Top += 12;
+        instruction.Margin = instructionMargin;
         registration.Controls.Add(instruction, 1, 2);
         registration.SetRowSpan(instruction, 2);
         instruction.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -339,8 +342,8 @@ internal sealed class SchedulerForm : Form
         var scheduler = new WindowsScheduler();
         var rows = Directory.EnumerateDirectories(Job.Root)
                 .Where(folder => File.Exists(Path.Combine(folder, "job.xml")))
-                .Select(folder => Job.Load(Path.GetFileName(folder)))
-                .Where(job => !File.Exists(job.CanceledPath))
+                .Select(LoadSchedule)
+                .Where(job => job != null && !File.Exists(job.CanceledPath))
                 .OrderByDescending(job => job.ScheduledUtc)
                 .Select(job =>
             {
@@ -356,6 +359,16 @@ internal sealed class SchedulerForm : Form
             }).Where(row => row != null).ToArray();
         jobs.ShowRows(rows, selected);
         UpdateSelection();
+    }
+
+    private static Job LoadSchedule(string folder)
+    {
+        try { return Job.Load(Path.GetFileName(folder)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or InvalidDataException)
+        {
+            Trace.TraceWarning("Could not load schedule in '{0}': {1}", folder, error.Message);
+            return null;
+        }
     }
 
     private static string DisplayResult(string result)

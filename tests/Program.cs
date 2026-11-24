@@ -27,7 +27,12 @@ await Test("CLI input, environment, streams and exit codes", async () =>
     job.Prompt = "new run";
     File.Delete(Path.Combine(job.Folder, "job.xml"));
     job.Save();
-    Check(await Run(job.Id) == 0 && File.ReadAllText(job.ResultPath) == "Completed", "Daily result replaced");
+    var previousLog = job.LogPath;
+    using (File.Open(previousLog, FileMode.Open, FileAccess.Read, FileShare.Read))
+    {
+        Check(await Run(job.Id) == 0 && File.ReadAllText(job.ResultPath) == "Completed", "Daily result replaced while previous log is open");
+        Check(job.LogPath != previousLog && File.ReadAllText(job.LogPath).Contains(job.Prompt), "Latest log contains the new run");
+    }
 });
 
 await Test("Missing CLI, invalid schedule ID and invalid agent", async () =>
@@ -37,6 +42,22 @@ await Test("Missing CLI, invalid schedule ID and invalid agent", async () =>
     Check(await Run(missing.Id) == 1 && File.ReadAllText(missing.ResultPath) == "Failed (1)", "Missing executable reported");
     var invalid = Create("invalid", agent: "bad agent");
     Check(await Run(invalid.Id) == 1 && File.ReadAllText(invalid.LogPath).Contains("agent name is invalid"), "Invalid agent rejected");
+});
+
+await Test("Daily run succeeds while the legacy run.log is open", async () =>
+{
+    var job = Create("first run after upgrade", daily: true);
+    var legacyLog = Path.Combine(job.Folder, "run.log");
+    File.WriteAllText(legacyLog, "earlier log");
+    Check(job.LogPath == legacyLog, "Existing daily log remains available before the first new run");
+    using (File.Open(legacyLog, FileMode.Open, FileAccess.Read, FileShare.Read))
+    {
+        Check(await Run(job.Id) == 0, "An open legacy log does not block the run");
+        Check(File.ReadAllText(job.LogPath).Contains(job.Prompt), "Open Log resolves to the new run");
+        Check(File.ReadAllText(legacyLog) == "earlier log", "Open legacy log remains intact");
+    }
+    Check(await Run(job.Id) == 0, "A subsequent daily run succeeds");
+    Check(!File.Exists(legacyLog), "Legacy log is cleaned up once it is no longer open");
 });
 
 await Test("Daily task registration, status, enable, disable and cancel", async () =>
@@ -65,6 +86,41 @@ await Test("Daily task registration, status, enable, disable and cancel", async 
         Check(scheduler.Status(job, out enabled) == "Canceled" && enabled == null, "Canceled status");
         var previousLog = File.ReadAllText(job.LogPath);
         Check(await Run(job.Id) == 0 && File.ReadAllText(job.LogPath) == previousLog, "Canceled run skipped");
+    }
+    finally { CleanupTask(job); }
+});
+
+await Test("An externally removed daily task can still be canceled", async () =>
+{
+    var job = Create("must not run after cancellation", daily: true);
+    try
+    {
+        scheduler.Register(job, app);
+        registered.Add(job.Id);
+        CleanupTask(job);
+        Check(scheduler.Status(job, out var enabled) == "Scheduled task not found" && enabled == null,
+            "Externally removed task reported");
+        scheduler.Cancel(job);
+        scheduler.Cancel(job);
+        Check(File.Exists(job.CanceledPath) && scheduler.Status(job, out _) == "Canceled",
+            "Local cancellation recorded even when the Windows task is missing");
+        Check(await Run(job.Id) == 0 && !File.Exists(job.LogPath), "Canceled worker skips execution");
+    }
+    finally { CleanupTask(job); }
+});
+
+await Test("Task launch failure supersedes an earlier result", async () =>
+{
+    var job = Create("earlier success", scheduledUtc: DateTime.UtcNow.AddSeconds(8));
+    try
+    {
+        File.WriteAllText(job.ResultPath, "Completed");
+        scheduler.Register(job, Path.Combine(sandbox, "missing", "AgentFlow.exe"));
+        registered.Add(job.Id);
+        // Use a one-time trigger to exercise the daily status handling without waiting for a wall-clock minute.
+        job.Daily = true;
+        await WaitUntil(() => scheduler.Status(job, out _).StartsWith("Run error (", StringComparison.Ordinal), 45);
+        Check(File.ReadAllText(job.ResultPath) == "Completed", "The earlier result remains on disk");
     }
     finally { CleanupTask(job); }
 });
