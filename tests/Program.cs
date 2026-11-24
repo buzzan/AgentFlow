@@ -121,6 +121,10 @@ await Test("Task launch failure supersedes an earlier result", async () =>
         job.Daily = true;
         await WaitUntil(() => scheduler.Status(job, out _).StartsWith("Run error (", StringComparison.Ordinal), 45);
         Check(File.ReadAllText(job.ResultPath) == "Completed", "The earlier result remains on disk");
+        scheduler.SetEnabled(job, false);
+        string paused = scheduler.Status(job, out bool? enabled, out _, out _, out string runResult);
+        Check(paused == "Off" && enabled == false && runResult.StartsWith("Run error (", StringComparison.Ordinal),
+            "Pausing preserves the most recent launch failure");
     }
     finally { CleanupTask(job); }
 });

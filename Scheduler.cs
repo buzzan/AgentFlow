@@ -7,8 +7,8 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
 using System.Xml.Serialization;
 
 public sealed class Job
@@ -158,7 +158,7 @@ internal sealed class WindowsScheduler
             task.Settings.DeleteExpiredTaskAfter = "P1D";
         }
         dynamic action = task.Actions.Create(execAction);
-        action.Path = executablePath ?? Application.ExecutablePath;
+        action.Path = executablePath ?? Environment.ProcessPath;
         action.Arguments = "--run " + job.Id;
         folder.RegisterTaskDefinition(job.TaskName, task, createOnly, user, null, interactiveToken, null);
     }
@@ -174,7 +174,15 @@ internal sealed class WindowsScheduler
     // 활성화 상태를 조회할 수 없는 경우 enabled는 null이다.
     internal string Status(Job job, out bool? enabled)
     {
+        return Status(job, out enabled, out _, out _, out _);
+    }
+
+    internal string Status(Job job, out bool? enabled, out DateTime? nextRun, out DateTime? lastRun, out string runResult)
+    {
         enabled = null;
+        nextRun = null;
+        lastRun = null;
+        runResult = ReadResult(job, out DateTime resultWrittenUtc);
         if (job.Daily && File.Exists(job.CanceledPath)) return "Canceled";
         try
         {
@@ -182,28 +190,27 @@ internal sealed class WindowsScheduler
             int state = task.State;
             if (job.Daily || DateTime.UtcNow < job.DeadlineUtc)
                 enabled = (bool)task.Enabled;
+            DateTime previous = task.LastRunTime;
+            // Task Scheduler reports a placeholder date before the first run.
+            if (previous.ToUniversalTime() >= job.ScheduledUtc) lastRun = previous;
+            if (enabled == true)
+            {
+                DateTime next = task.NextRunTime;
+                if (next >= DateTime.Today) nextRun = next;
+            }
+            int result = task.LastTaskResult;
+            bool failed = result is not (0 or 0x41301 or 0x41303 or 0x41325);
+            if (failed && (runResult == null || previous.ToUniversalTime() > resultWrittenUtc))
+                runResult = String.Format("Run error (0x{0:X8})", result);
             if (state == 4) return "Running";
             if (enabled == false) return "Off";
             if (state == 2) return "Queued";
-            int result = task.LastTaskResult;
             if (job.Daily)
             {
-                bool failed = result != 0x41303 && result != 0;
-                if (File.Exists(job.ResultPath))
-                {
-                    // LastRunTime is the scheduled attempt's start time in local time.
-                    if (!failed || ((DateTime)task.LastRunTime).ToUniversalTime() <= File.GetLastWriteTimeUtc(job.ResultPath))
-                    {
-                        using var stream = File.Open(job.ResultPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-                        using var reader = new StreamReader(stream);
-                        return "Last run: " + reader.ReadToEnd();
-                    }
-                }
-                if (!failed) return "Scheduled";
-                return String.Format("Run error (0x{0:X8})", result);
+                if (runResult == null) return "Scheduled";
+                return runResult.StartsWith("Run error (", StringComparison.Ordinal) ? runResult : "Last run: " + runResult;
             }
-            if (result != 0x41303 && result != 0 && !File.Exists(job.ResultPath))
-                return String.Format("Run error (0x{0:X8})", result);
+            if (failed && !File.Exists(job.ResultPath)) return runResult;
             if (DateTime.UtcNow >= job.DeadlineUtc) return "Expired";
             return DateTime.UtcNow < job.ScheduledUtc ? "Scheduled" : "Waiting to start";
         }
@@ -211,6 +218,19 @@ internal sealed class WindowsScheduler
         {
             return !job.Daily && DateTime.UtcNow >= job.DeadlineUtc ? "Expired" : "Scheduled task not found";
         }
+    }
+
+    private static string ReadResult(Job job, out DateTime writtenUtc)
+    {
+        writtenUtc = DateTime.MinValue;
+        try
+        {
+            using var stream = File.Open(job.ResultPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            writtenUtc = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+            return reader.ReadToEnd();
+        }
+        catch (FileNotFoundException) { return null; }
     }
 
     // Windows 작업을 삭제하고 취소를 기록한다. 단발 예약은 실행 전에 선점할 수 있을 때만 취소한다.
@@ -248,19 +268,11 @@ internal static class Program
             try { return Run(Job.Load(args[1])); }
             catch { return 1; }
         }
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        var font = new System.Drawing.Font(WinUIHost.AppFontFamily, 10);
-        if (font.Name != WinUIHost.AppFontFamily)
-        {
-            font.Dispose();
-            font = new System.Drawing.Font("Segoe UI", 10);
-        }
-        using var appFont = font;
-        Application.SetDefaultFont(appFont);
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-        WinUIHost.RunApplication();
-        return 0;
+        using var windowInstance = new Mutex(false, @"Local\AgentFlow.MainWindow", out bool firstWindow);
+        if (!firstWindow) return 0;
+
+        AgentFlow.ScheduleCenterApp.Run();
+        return Environment.ExitCode;
     }
 
     // 단발 예약은 한 번만 선점하고, 일일 예약은 잠금 파일로 동시 실행을 막고 취소 여부를 확인한다.

@@ -1,0 +1,48 @@
+<UserControl
+    x:Class="AgentFlow.ScheduleTable"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentFlow">
+    <Grid RowDefinitions="Auto,*">
+        <Grid Padding="12,8" ColumnSpacing="8" ColumnDefinitions="1.55*,0.8*,1.2*,80">
+            <TextBlock Text="Agent / Project" Style="{StaticResource ScheduleSecondaryText}" />
+            <TextBlock Grid.Column="1" Text="Schedule time" Style="{StaticResource ScheduleSecondaryText}" />
+            <TextBlock Grid.Column="2" Text="Last result / run" Style="{StaticResource ScheduleSecondaryText}" />
+            <TextBlock Grid.Column="3" Text="Enabled" Style="{StaticResource ScheduleSecondaryText}" />
+        </Grid>
+        <ListView x:Name="Rows" Grid.Row="1" AutomationProperties.Name="Scheduled Runs"
+                  AutomationProperties.AutomationId="ScheduleList" DoubleTapped="RowDoubleTapped" KeyDown="RowKeyDown">
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="MinHeight" Value="52" />
+                    <Setter Property="Padding" Value="12,4" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="local:Schedule">
+                    <Grid ColumnSpacing="8" ColumnDefinitions="1.55*,0.8*,1.2*,80">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="{x:Bind Agent}" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                       TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                                       ToolTipService.ToolTip="{x:Bind Agent}" />
+                            <TextBlock Text="{x:Bind ProjectName}" Style="{StaticResource ScheduleSecondaryText}"
+                                       AutomationProperties.Name="{x:Bind ProjectPath}" ToolTipService.ToolTip="{x:Bind ProjectPath}" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="{x:Bind Time}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock Text="{x:Bind ResultText}" TextWrapping="Wrap" MaxLines="2"
+                                       TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ResultText}" />
+                            <TextBlock Text="{x:Bind LastRunText}" Style="{StaticResource ScheduleSecondaryText}"
+                                       ToolTipService.ToolTip="{x:Bind LastRunText}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="3" MinWidth="0" OnContent="" OffContent=""
+                                      AutomationProperties.Name="{x:Bind ToggleName}"
+                                      AutomationProperties.AutomationId="{x:Bind ToggleId}"
+                                      Loaded="InitializeToggle" DataContextChanged="ToggleDataChanged" Toggled="ToggleChanged" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</UserControl>

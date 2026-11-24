@@ -6,9 +6,9 @@ Windows x64에서 지정한 프로젝트의 Claude Code 에이전트가 매일 �
 
 1. 사용할 Windows 계정으로 Claude Code CLI에 로그인합니다. 대상 프로젝트에서 Claude Code를 한 번 열어 폴더 신뢰 설정과 작업에 필요한 도구 권한을 확인합니다.
 2. `dist\daily-row-toggle\AgentFlow.exe`를 실행합니다. 예약을 등록하기 전에 배포 폴더 전체를 계속 사용할 위치에 둡니다.
-3. 프로젝트 폴더를 선택합니다. CLI가 자동으로 검색되지 않으면 설치된 `claude.exe`를 선택합니다.
+3. **New schedule**을 열고 프로젝트 폴더를 선택합니다. CLI가 자동으로 검색되지 않으면 설치된 `claude.exe`를 선택합니다.
 4. `.claude\agents`에서 찾은 에이전트를 선택하거나 이름을 직접 입력합니다. **Daily Run Time**과 작업 지시를 입력하고 **Schedule**을 누릅니다.
-5. **Refresh**로 상태를 확인하고 **Open Log**로 가장 최근 실행 로그를 봅니다. **Cancel Schedule**로 이후 반복 실행을 취소할 수 있습니다.
+5. **Schedules**에서 활성 일정 수, 다음 실행 시각, 최근 실패 수를 확인합니다. 행의 토글로 일정을 일시 중지하거나 다시 켭니다. **Cancel Schedule**로 이후 반복 실행을 취소합니다. **Run history**에서는 취소된 예약을 포함해 로그가 있는 예약의 가장 최근 로그를 열 수 있습니다.
 
 예약 시각은 Windows 현지 시간입니다. 실행 시에는 예약을 등록한 Windows 계정이 로그인되어 있어야 합니다. 예약을 놓치면 Windows 작업 스케줄러에서 실행 가능한 시점에 시작할 수 있습니다. 이전 실행이 진행 중이면 새 실행과 겹치지 않습니다. 예약을 취소할 때까지 배포 폴더와 프로젝트 폴더의 위치를 유지하세요.
 
@@ -18,9 +18,13 @@ Claude Code는 프로젝트 폴더를 작업 디렉터리로 사용하고 기본
 
 Windows x64에서 .NET SDK 10.0.404를 사용해 PowerShell로 `.\build.ps1`을 실행합니다. 배포 결과는 `dist\daily-row-toggle`에 생성됩니다.
 
-실행할 PC에는 x64용 .NET 10 Desktop Runtime과 Windows App Runtime 1.8이 필요합니다.
+실행할 PC에는 x64용 .NET 10 Runtime과 Windows App Runtime 1.8이 필요합니다.
 
 ## 테스트
+
+- `.\tests\run.ps1 -Suite Integration`은 예약 등록과 실행을 검증합니다.
+- `.\tests\run.ps1 -Suite UI`는 Windows UI Automation으로 예약 화면을 검증합니다. 같은 로그인 세션에 AgentFlow 창이 열려 있으면 먼저 닫아 주세요.
+- 기본 실행은 두 테스트를 모두 수행합니다. `work\test-results\<실행 ID>`에 단계별 로그, `test-results.json`, UI 캡처를 남깁니다. `-ArtifactDirectory`로 새 출력 폴더를 지정할 수 있습니다. 실패한 단계가 있으면 종료 코드가 1입니다.
 
 Windows에 로그인한 상태에서 PowerShell로 `.\tests\run.ps1`을 실행합니다. 빌드 요구 사항과 Windows 작업 스케줄러가 필요합니다. Claude Code 설치, 로그인, API 키는 필요 없습니다.
 
