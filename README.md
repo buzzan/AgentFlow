@@ -14,6 +14,10 @@ Windows x64에서 지정한 프로젝트의 Claude Code 에이전트가 매일 �
 
 Claude Code는 프로젝트 폴더를 작업 디렉터리로 사용하고 기본 권한 모드에서 비대화형으로 실행됩니다. 대화형 승인이 필요한 도구는 예약 실행에서 사용이 거부될 수 있습니다. 작업 지시와 실행 로그는 `%LOCALAPPDATA%\ClaudeAgentScheduler`에 저장됩니다.
 
+## 개발 지침
+
+WinUI 작업에 사용할 Codex 스킬과 설치 방법은 [개발 지침](AGENTS.md)을 참고하세요.
+
 ## 빌드
 
 Windows x64에서 .NET SDK 10.0.404를 사용해 PowerShell로 `.\build.ps1`을 실행합니다. 배포 결과는 `dist\daily-row-toggle`에 생성됩니다.
