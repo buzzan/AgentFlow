@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -26,6 +27,7 @@ internal sealed class DailyTimePicker : WinUIHost
         TabStop = true;
     }
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     internal TimeSpan Time
     {
         get { return picker == null ? time : picker.Time; }
@@ -43,6 +45,7 @@ internal sealed class DailyTimePicker : WinUIHost
         picker = new TimePicker
         {
             Header = "Daily Run Time",
+            FontFamily = UiFont,
             ClockIdentifier = "12HourClock",
             SelectedTime = time
         };
@@ -82,6 +85,8 @@ internal sealed class ScheduleList : WinUIHost
     internal event Action SelectionChanged;
     internal event Action OpenLogRequested;
     internal event Action<Row, bool> ToggleRequested;
+    private XamlControls.TextBlock emptyMessage;
+
     internal Row Selected => (list?.SelectedItem as XamlControls.ListViewItem)?.Tag as Row;
 
     internal ScheduleList()
@@ -94,6 +99,7 @@ internal sealed class ScheduleList : WinUIHost
         rows = updated;
         selectedId = selected;
         if (list == null) return;
+        emptyMessage.Visibility = rows.Length == 0 ? Xaml.Visibility.Visible : Xaml.Visibility.Collapsed;
         var items = rows.Select(CreateRow).ToArray();
         list.ItemsSource = items;
         list.SelectedItem = items.FirstOrDefault(item => ((Row)item.Tag).Job.Id == selected);
@@ -102,13 +108,23 @@ internal sealed class ScheduleList : WinUIHost
 
     protected override Xaml.UIElement CreateContent()
     {
-        list = new XamlControls.ListView { TabFocusNavigation = Xaml.Input.KeyboardNavigationMode.Local };
+        list = new XamlControls.ListView { TabFocusNavigation = Xaml.Input.KeyboardNavigationMode.Local, FontFamily = UiFont };
+        emptyMessage = new XamlControls.TextBlock
+        {
+            Text = "No schedules yet. Add a schedule above to get started.",
+            FontFamily = UiFont,
+            HorizontalAlignment = Xaml.HorizontalAlignment.Center,
+            VerticalAlignment = Xaml.VerticalAlignment.Center,
+            TextWrapping = Xaml.TextWrapping.Wrap,
+            Margin = new Xaml.Thickness(16)
+        };
         Xaml.Automation.AutomationProperties.SetName(list, AccessibleName);
         list.SelectionChanged += delegate { SelectionChanged?.Invoke(); };
         var header = Columns();
         header.Margin = new Xaml.Thickness(12, 0, 12, 0);
         string[] headings = { "Scheduled Time", "Agent", "Project", "Status", "Enabled" };
-        for (int i = 0; i < headings.Length; i++) AddText(header, headings[i], i);
+        for (int i = 0; i < headings.Length; i++)
+            AddText(header, headings[i], i).FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
         ShowRows(rows, selectedId);
         var root = new XamlControls.Grid();
         root.RowDefinitions.Add(new XamlControls.RowDefinition { Height = Xaml.GridLength.Auto });
@@ -116,6 +132,8 @@ internal sealed class ScheduleList : WinUIHost
         root.Children.Add(header);
         XamlControls.Grid.SetRow(list, 1);
         root.Children.Add(list);
+        XamlControls.Grid.SetRow(emptyMessage, 1);
+        root.Children.Add(emptyMessage);
         return root;
     }
 
@@ -141,7 +159,7 @@ internal sealed class ScheduleList : WinUIHost
         };
         if (row.Enabled.HasValue)
         {
-            var toggle = new ToggleSwitch { OnContent = "On", OffContent = "Off", IsOn = row.Enabled.Value, MinWidth = 0 };
+            var toggle = new ToggleSwitch { OnContent = "On", OffContent = "Off", IsOn = row.Enabled.Value, MinWidth = 0, FontFamily = UiFont };
             Xaml.Automation.AutomationProperties.SetName(toggle, "Enable " + row.Job.Agent + ", " + row.Time);
             toggle.DoubleTapped += delegate(object sender, Xaml.Input.DoubleTappedRoutedEventArgs args) { args.Handled = true; };
             toggle.Toggled += delegate
@@ -174,7 +192,7 @@ internal sealed class ScheduleList : WinUIHost
     {
         var text = new XamlControls.TextBlock
         {
-            Text = value, TextTrimming = Xaml.TextTrimming.CharacterEllipsis,
+            Text = value, FontFamily = UiFont, TextTrimming = Xaml.TextTrimming.CharacterEllipsis,
             VerticalAlignment = Xaml.VerticalAlignment.Center, Margin = new Xaml.Thickness(0, 0, 8, 0)
         };
         XamlControls.Grid.SetColumn(text, column);
@@ -192,6 +210,8 @@ internal sealed class ScheduleList : WinUIHost
 
 internal abstract class WinUIHost : Control
 {
+    internal const string AppFontFamily = "Segoe UI Variable Text";
+    protected static Xaml.Media.FontFamily UiFont => new Xaml.Media.FontFamily(AppFontFamily + ", Segoe UI");
     private DesktopWindowXamlSource island;
 
     protected abstract Microsoft.UI.Xaml.UIElement CreateContent();
@@ -264,6 +284,7 @@ internal abstract class WinUIHost : Control
             using (WindowsXamlManager.InitializeForCurrentThread())
             {
                 app.Resources.MergedDictionaries.Add(new XamlControlsResources());
+                app.Resources["ContentControlThemeFontFamily"] = UiFont;
                 Application.AddMessageFilter(messages);
                 try
                 {

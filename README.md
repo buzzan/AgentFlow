@@ -16,4 +16,14 @@ Claude Code는 프로젝트 폴더를 작업 디렉터리로 사용하고 기본
 
 ## 빌드
 
-Windows x64에서 .NET 8 SDK를 사용해 PowerShell로 `.\build.ps1`을 실행합니다. WinUI를 포함한 배포 결과는 `dist\daily-row-toggle`에 생성됩니다.
+Windows x64에서 .NET SDK 10.0.404를 사용해 PowerShell로 `.\build.ps1`을 실행합니다. 배포 결과는 `dist\daily-row-toggle`에 생성됩니다.
+
+실행할 PC에는 x64용 .NET 10 Desktop Runtime과 Windows App Runtime 1.8이 필요합니다.
+
+## 테스트
+
+Windows에 로그인한 상태에서 PowerShell로 `.\tests\run.ps1`을 실행합니다. 빌드 요구 사항과 Windows 작업 스케줄러가 필요합니다. Claude Code 설치, 로그인, API 키는 필요 없습니다.
+
+VS Code에서는 저장소 폴더를 열고 명령 팔레트(`Ctrl+Shift+P`)에서 `Tasks: Run Test Task`를 실행합니다. 결과는 통합 터미널에 표시됩니다.
+
+테스트는 임시 폴더에서 가짜 `claude.exe`를 빌드하고, 실행 인수·작업 폴더·유니코드 입력·로그·실패 코드와 예약 등록·켜기·끄기·취소·중복 실행 방지를 검증합니다. Windows 작업 스케줄러가 테스트 예약을 한 번 실행하며, GUI 테스트는 창 시작, 버튼 상태, 새로 고침, 폼에서 예약 등록·선택·취소를 확인합니다. 테스트가 만든 예약과 작업 데이터는 테스트 종료 시 정리합니다.

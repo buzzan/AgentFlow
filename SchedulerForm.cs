@@ -10,7 +10,7 @@ using System.Windows.Forms;
 
 internal sealed class SchedulerForm : Form
 {
-    private static readonly Color Accent = Color.FromArgb(0, 95, 184);
+    private static readonly Color Accent = Color.FromArgb(29, 78, 216);
     private static readonly Color SecondaryText = SystemInformation.HighContrast
         ? SystemColors.WindowText : Color.FromArgb(89, 89, 89);
     private readonly TextBox project = new TextBox();
@@ -21,16 +21,16 @@ internal sealed class SchedulerForm : Form
     private readonly ScheduleList jobs = new ScheduleList();
     private readonly Label selection = new Label { AutoSize = true };
     private readonly Label registrationStatus = new Label { AutoSize = true, ForeColor = SecondaryText };
+    private readonly Button openLogButton;
+    private readonly Button cancelButton;
 
     internal SchedulerForm()
     {
         Text = "AgentFlow";
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        Font = new Font("Segoe UI Variable Text", 10);
-        if (Font.Name != "Segoe UI Variable Text") Font = new Font("Segoe UI", 10);
         AutoScaleMode = AutoScaleMode.Font;
         SetStyle(ControlStyles.ResizeRedraw, true);
-        BackColor = SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(243, 243, 243);
+        BackColor = SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(240, 244, 249);
         ForeColor = SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(32, 32, 32);
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(940, 680);
@@ -47,12 +47,18 @@ internal sealed class SchedulerForm : Form
         registration.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         registration.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         layout.Controls.Add(registration, 0, 0);
-        var registrationHeading = Heading("New Schedule", 13);
+        var registrationHeading = Heading("New Schedule", 16);
         registration.Controls.Add(registrationHeading, 0, 0);
         registration.SetColumnSpan(registrationHeading, 2);
         var browseProject = Button("Browse Folder", BrowseProject);
         browseProject.Anchor = AnchorStyles.Left;
-        registration.Controls.Add(Field("Project", project, browseProject), 0, 1);
+        var projectField = Field("Project", project, browseProject);
+        projectField.Dock = DockStyle.None;
+        projectField.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        var projectMargin = projectField.Margin;
+        projectMargin.Top += 5;
+        projectField.Margin = projectMargin;
+        registration.Controls.Add(projectField, 0, 1);
         registration.Controls.Add(Field("Claude CLI", claude, Button("Browse File", BrowseClaude)), 0, 2);
         var reloadAgents = Button("Reload Agents", LoadAgents);
         reloadAgents.Anchor = AnchorStyles.Left;
@@ -86,7 +92,7 @@ internal sealed class SchedulerForm : Form
         history.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         history.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(history, 0, 1);
-        history.Controls.Add(Bar(Heading("Scheduled Runs", 13), Button("Refresh", RefreshJobs)), 0, 0);
+        history.Controls.Add(Bar(Heading("Scheduled Runs", 16), Button("Refresh", RefreshJobs)), 0, 0);
 
         jobs.AccessibleName = "Scheduled Runs";
         jobs.Dock = DockStyle.Fill;
@@ -97,8 +103,10 @@ internal sealed class SchedulerForm : Form
         history.Controls.Add(jobs, 0, 1);
 
         var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        buttons.Controls.Add(Button("Open Log", OpenLog));
-        buttons.Controls.Add(Button("Cancel Schedule", Cancel));
+        openLogButton = Button("Open Log", OpenLog);
+        cancelButton = Button("Cancel Schedule", Cancel);
+        buttons.Controls.Add(openLogButton);
+        buttons.Controls.Add(cancelButton);
         selection.ForeColor = SecondaryText;
         UpdateSelection();
         history.Controls.Add(Bar(selection, buttons), 0, 2);
@@ -143,7 +151,7 @@ internal sealed class SchedulerForm : Form
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             base.OnPaintBackground(e);
-            float diameter = 16 * e.Graphics.DpiX / 96;
+            float diameter = 24 * e.Graphics.DpiX / 96;
             float right = ClientSize.Width - 1;
             float bottom = ClientSize.Height - 1;
             if (right <= diameter || bottom <= diameter) return;
@@ -199,7 +207,7 @@ internal sealed class SchedulerForm : Form
 
     private Button Button(string text, Action action, bool primary = false)
     {
-        var button = new Button { Text = text, AutoSize = true, MinimumSize = new Size(0, 32) };
+        var button = new Button { Text = text, AutoSize = true, MinimumSize = new Size(0, 34), Padding = new Padding(8, 0, 8, 0) };
         if (primary && !SystemInformation.HighContrast)
         {
             button.FlatStyle = FlatStyle.Flat;
@@ -214,6 +222,8 @@ internal sealed class SchedulerForm : Form
     private void UpdateSelection()
     {
         var row = jobs.Selected;
+        openLogButton.Enabled = row != null;
+        cancelButton.Enabled = row != null;
         selection.Text = row == null ? "No schedule selected" : row.Job.Agent + " · " + row.Status;
     }
 
@@ -329,17 +339,21 @@ internal sealed class SchedulerForm : Form
         var scheduler = new WindowsScheduler();
         var rows = Directory.EnumerateDirectories(Job.Root)
                 .Where(folder => File.Exists(Path.Combine(folder, "job.xml")))
-                .Select(folder => Job.Load(Path.GetFileName(folder))).OrderByDescending(job => job.ScheduledUtc)
+                .Select(folder => Job.Load(Path.GetFileName(folder)))
+                .Where(job => !File.Exists(job.CanceledPath))
+                .OrderByDescending(job => job.ScheduledUtc)
                 .Select(job =>
             {
+                string recordedResult = !job.Daily && File.Exists(job.ResultPath)
+                    ? DisplayResult(File.ReadAllText(job.ResultPath)) : null;
+                if (recordedResult == "Canceled") return null;
                 bool? enabled = null;
-                string status = !job.Daily && File.Exists(job.ResultPath)
-                    ? DisplayResult(File.ReadAllText(job.ResultPath)) : scheduler.Status(job, out enabled);
+                string status = recordedResult ?? scheduler.Status(job, out enabled);
                 string schedule = job.Daily ? "Daily at " + DateTime.Today.AddHours(job.DailyHour)
                     .AddMinutes(job.DailyMinute).ToString("h:mm tt", CultureInfo.InvariantCulture)
                     : job.ScheduledUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
                 return new ScheduleList.Row(job, schedule, status, enabled);
-            }).ToArray();
+            }).Where(row => row != null).ToArray();
         jobs.ShowRows(rows, selected);
         UpdateSelection();
     }
@@ -364,7 +378,7 @@ internal sealed class SchedulerForm : Form
     {
         string path = Selected().LogPath;
         if (!File.Exists(path)) throw new InvalidOperationException("The run log is not available yet.");
-        Process.Start(path);
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
     private void Cancel()

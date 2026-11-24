@@ -85,7 +85,7 @@ internal sealed class WindowsScheduler
         folder = service.GetFolder("\\");
     }
 
-    internal void Register(Job job)
+    internal void Register(Job job, string executablePath = null)
     {
         const int timeTrigger = 1;
         const int dailyTrigger = 2;
@@ -119,7 +119,7 @@ internal sealed class WindowsScheduler
             task.Settings.DeleteExpiredTaskAfter = "P1D";
         }
         dynamic action = task.Actions.Create(execAction);
-        action.Path = Application.ExecutablePath;
+        action.Path = executablePath ?? Application.ExecutablePath;
         action.Arguments = "--run " + job.Id;
         folder.RegisterTaskDefinition(job.TaskName, task, createOnly, user, null, interactiveToken, null);
     }
@@ -190,6 +190,14 @@ internal static class Program
             catch { return 1; }
         }
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        var font = new System.Drawing.Font(WinUIHost.AppFontFamily, 10);
+        if (font.Name != WinUIHost.AppFontFamily)
+        {
+            font.Dispose();
+            font = new System.Drawing.Font("Segoe UI", 10);
+        }
+        using var appFont = font;
+        Application.SetDefaultFont(appFont);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         WinUIHost.RunApplication();

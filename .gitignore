@@ -2,3 +2,5 @@
 /obj/
 /dist/
 /work/
+**/bin/
+**/obj/
